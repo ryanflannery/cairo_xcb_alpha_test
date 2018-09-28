@@ -104,10 +104,6 @@ cairo_clear_background()
 int
 main()
 {
-   const size_t fsize = 100;
-   char file1[fsize];
-   char file2[fsize];
-
    /* xcb setup (all below main, for ease, but also posterity) */
    setup_xcb();
 
@@ -127,26 +123,11 @@ main()
 
    /* begin main draw loop */
    for (int i = 0; i < 11; i++) {
-      /*
-      snprintf(file1, fsize, "cairo_example_root_%02d.png", i);
-      cairo_surface_write_to_png(surface, file1);
-      snprintf(file2, fsize, "cairo_example_target_%02d.png", i);
-      cairo_surface_write_to_png(cairo_get_target(cairo), file2);
-      */
-
       /* START: create new group/buffer, set it's background  */
       cairo_push_group(cairo);
 
-         xcb_flush(xcon);
-         snprintf(file1, fsize, "cimg_%02d_before.png", i);
-         cairo_surface_write_to_png(cairo_get_target(cairo), file1);
-      cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
       cairo_set_source_rgba(cairo, 0.8, 0, 0, 0.1);
       cairo_paint(cairo);
-      cairo_set_operator(cairo, CAIRO_OPERATOR_OVER);
-         xcb_flush(xcon);
-         snprintf(file2, fsize, "cimg_%02d_later.png", i);
-         cairo_surface_write_to_png(cairo_get_target(cairo), file2);
 
       /* now do all my drawing... */
       cairo_set_source_rgba(cairo, 0, 1, 0, 0.5);
@@ -159,9 +140,9 @@ main()
 
       /* END: pop group/buffer (exposing it) and render */
       cairo_pop_group_to_source(cairo);
-      /*cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE); XXX Makes the background black (?) */
+      cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
       cairo_paint(cairo);
-      /*cairo_set_operator(cairo, CAIRO_OPERATOR_OVER); only done if th eprevious cairo_set_operator() is done */
+      cairo_set_operator(cairo, CAIRO_OPERATOR_OVER);
       xcb_flush(xcon);
       sleep(1);
    }
@@ -192,12 +173,13 @@ get_xvisual(xcb_screen_t *screen)
 {
    xcb_depth_iterator_t i = xcb_screen_allowed_depths_iterator(screen);
    for (; i.rem; xcb_depth_next(&i)) {
+      if (i.data->depth != 32)
+         continue;
+
       xcb_visualtype_iterator_t vi;
       vi = xcb_depth_visuals_iterator(i.data);
       for (; vi.rem; xcb_visualtype_next(&vi)) {
-         if (screen->root_visual == vi.data->visual_id) {
-            return vi.data;
-         }
+         return vi.data;
       }
    }
 
@@ -278,16 +260,13 @@ wm_hints()
          xatoms[NET_WM_STRUT_PARTIAL], XCB_ATOM_CARDINAL, 32, 12, struts);
 	xcb_change_property(xcon, XCB_PROP_MODE_REPLACE, xwindow,
          xatoms[NET_WM_STRUT], XCB_ATOM_CARDINAL, 32, 4, struts);
-
-   /* remove window from window manager tabbing */
-   const uint32_t val[] = { 1 };
-   xcb_change_window_attributes(xcon, xwindow,
-         XCB_CW_OVERRIDE_REDIRECT, val);
 }
 
 void
 setup_xcb()
 {
+   xcb_colormap_t colormap;
+
    xcon = xcb_connect(NULL, &default_screen);
    if (xcb_connection_has_error(xcon)) {
       xcb_disconnect(xcon);
@@ -300,23 +279,28 @@ setup_xcb()
    if (NULL == (xvisual = get_xvisual(xscreen)))
       errx(1, "Failed to retrieve X visual context");
 
-   static uint32_t valwin[2] = {
+   colormap = xcb_generate_id(xcon);
+   xcb_create_colormap(xcon, XCB_COLORMAP_ALLOC_NONE, colormap, xscreen->root, xvisual->visual_id);
+   uint32_t valwin[5] = {
       XCB_NONE,
-      XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS
+      0,
+      1,
+      XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS,
+      colormap
    };
 
    xwindow = xcb_generate_id(xcon);
    xcb_create_window(
          xcon,
-         XCB_COPY_FROM_PARENT,
+         32,
          xwindow,
          xscreen->root,
          x, y,
          y, h,
          1,    /* border width */
          XCB_WINDOW_CLASS_INPUT_OUTPUT,
-         xscreen->root_visual,
-         XCB_CW_EVENT_MASK | XCB_CW_BACK_PIXMAP,
+         xvisual->visual_id,
+         XCB_CW_BACK_PIXMAP | XCB_CW_BORDER_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK | XCB_CW_COLORMAP,
          valwin);
 
    xcb_get_geometry_cookie_t gcookie = xcb_get_geometry(xcon, xwindow);
